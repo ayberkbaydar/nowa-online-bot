@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Appium / OCR / runtime
+shots/
+*.png
+*.jpg
+
+# Local configs
+config.json
+targets.json
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+A

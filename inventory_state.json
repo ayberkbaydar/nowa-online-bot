@@ -1,0 +1,37 @@
+{
+  "rows": 4,
+  "cols": 7,
+  "slots": [
+    { "idx": 0,  "row": 0, "col": 0, "item_name": null, "upgrade": null },
+    { "idx": 1,  "row": 0, "col": 1, "item_name": null, "upgrade": null },
+    { "idx": 2,  "row": 0, "col": 2, "item_name": null, "upgrade": null },
+    { "idx": 3,  "row": 0, "col": 3, "item_name": null, "upgrade": null },
+    { "idx": 4,  "row": 0, "col": 4, "item_name": null, "upgrade": null },
+    { "idx": 5,  "row": 0, "col": 5, "item_name": null, "upgrade": null },
+    { "idx": 6,  "row": 0, "col": 6, "item_name": null, "upgrade": null },
+
+    { "idx": 7,  "row": 1, "col": 0, "item_name": null, "upgrade": null },
+    { "idx": 8,  "row": 1, "col": 1, "item_name": null, "upgrade": null },
+    { "idx": 9,  "row": 1, "col": 2, "item_name": null, "upgrade": null },
+    { "idx": 10, "row": 1, "col": 3, "item_name": null, "upgrade": null },
+    { "idx": 11, "row": 1, "col": 4, "item_name": null, "upgrade": null },
+    { "idx": 12, "row": 1, "col": 5, "item_name": null, "upgrade": null },
+    { "idx": 13, "row": 1, "col": 6, "item_name": null, "upgrade": null },
+
+    { "idx": 14, "row": 2, "col": 0, "item_name": null, "upgrade": null },
+    { "idx": 15, "row": 2, "col": 1, "item_name": null, "upgrade": null },
+    { "idx": 16, "row": 2, "col": 2, "item_name": null, "upgrade": null },
+    { "idx": 17, "row": 2, "col": 3, "item_name": null, "upgrade": null },
+    { "idx": 18, "row": 2, "col": 4, "item_name": null, "upgrade": null },
+    { "idx": 19, "row": 2, "col": 5, "item_name": null, "upgrade": null },
+    { "idx": 20, "row": 2, "col": 6, "item_name": null, "upgrade": null },
+
+    { "idx": 21, "row": 3, "col": 0, "item_name": null, "upgrade": null },
+    { "idx": 22, "row": 3, "col": 1, "item_name": null, "upgrade": null },
+    { "idx": 23, "row": 3, "col": 2, "item_name": null, "upgrade": null },
+    { "idx": 24, "row": 3, "col": 3, "item_name": null, "upgrade": null },
+    { "idx": 25, "row": 3, "col": 4, "item_name": null, "upgrade": null },
+    { "idx": 26, "row": 3, "col": 5, "item_name": null, "upgrade": null },
+    { "idx": 27, "row": 3, "col": 6, "item_name": null, "upgrade": null }
+  ]
+}
