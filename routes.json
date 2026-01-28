@@ -1,0 +1,51 @@
+{
+  "root": "Root (367,410)",
+  "direct_rules": [
+    ["[Scroll] (406,361)", "Blacksmith [Upgrade] (402,375)"],
+    ["Blacksmith [Upgrade] (402,375)", "[Scroll] (406,361)"],
+    ["Blacksmith [Upgrade] (402,375)", "[Warehouse] (371,422)"],
+    ["[Warehouse] (371,422)", "Blacksmith [Upgrade] (402,375)"],
+    ["[Warehouse] (371,422)", "[Scroll] (406,361)"],
+    ["[Scroll] (406,361)", "[Warehouse] (371,422)"]
+  ],
+  "legs": {
+    "[Scroll] (406,361)->Blacksmith [Upgrade] (402,375)": {
+      "hold_ms": 3200,
+      "R": 320,
+      "end_dx": -300,
+      "end_dy": 30
+    },
+    "Blacksmith [Upgrade] (402,375)->[Scroll] (406,361)": {
+      "hold_ms": 3200,
+      "R": 320,
+      "end_dx": 300,
+      "end_dy": -30
+    },
+    "Blacksmith [Upgrade] (402,375)->[Warehouse] (371,422)": {
+        "hold_ms": 12800,
+        "R": 320,
+        "end_dx": -300,
+        "end_dy": 100
+    },
+    "[Warehouse] (371,422)->Blacksmith [Upgrade] (402,375)": {
+        "hold_ms": 12800,
+        "R": 320,
+        "end_dx": 300,
+        "end_dy": -100
+    },
+
+    "[Warehouse] (371,422)->[Scroll] (406,361)": {
+        "hold_ms": 16000,
+        "R": 320,
+        "end_dx": 300,
+        "end_dy": -85
+    },
+    "[Scroll] (406,361)->[Warehouse] (371,422)": {
+        "hold_ms": 16000,
+        "R": 320,
+        "end_dx": -300,
+        "end_dy": 85
+    }
+
+  }
+}

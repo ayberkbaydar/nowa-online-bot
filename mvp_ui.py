@@ -34,6 +34,7 @@ APP_ACTIVITY = "com.unity3d.player.UnityPlayerActivity"
 CONFIG_PATH = "config.json"
 SHOTS_DIR = "shots"
 TARGETS_PATH = "targets.json"
+ROUTES_PATH = "routes.json"
 
 def ts():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -90,9 +91,32 @@ def save_config(cfg):
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
 
-
 def ensure_dirs():
     os.makedirs(SHOTS_DIR, exist_ok=True)
+
+def load_routes():
+    if not os.path.exists(ROUTES_PATH):
+        return {"root": None, "direct_rules": [], "legs": {}}
+    with open(ROUTES_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data.setdefault("root", None)
+    data.setdefault("direct_rules", [])
+    data.setdefault("legs", {})
+    return data
+
+def save_routes(routes: dict):
+    with open(ROUTES_PATH, "w", encoding="utf-8") as f:
+        json.dump(routes, f, indent=2, ensure_ascii=False)
+
+def leg_key(a: str, b: str) -> str:
+    return f"{a}->{b}"
+
+def is_direct_allowed(routes: dict, a: str, b: str) -> bool:
+    # direct_rules list of [from,to]
+    for pair in routes.get("direct_rules", []):
+        if isinstance(pair, list) and len(pair) == 2 and pair[0] == a and pair[1] == b:
+            return True
+    return False
 
 def load_targets():
     """
@@ -452,10 +476,35 @@ class NowaBot:
         ]
         self._post_w3c_actions_http(actions)
 
+    def joystick_run_w3c_raw(self, start_x: int, start_y: int, end_x: int, end_y: int, move_ms: int = 220, run_hold_ms: int = 600):
+        """
+        down -> move(to direction) -> pause(run_hold_ms) -> up
+        Snap adımları için kısa koşu.
+        """
+        actions = [
+            {
+                "type": "pointer",
+                "id": "finger1",
+                "parameters": {"pointerType": "touch"},
+                "actions": [
+                    {"type": "pointerMove", "duration": 0, "x": int(start_x), "y": int(start_y)},
+                    {"type": "pointerDown", "button": 0},
+                    {"type": "pause", "duration": 220},
+                    {"type": "pointerMove", "duration": int(move_ms), "x": int(end_x), "y": int(end_y)},
+                    {"type": "pause", "duration": int(run_hold_ms)},
+                    {"type": "pointerUp", "button": 0},
+                ],
+            }
+        ]
+        self._post_w3c_actions_http(actions)
 
-    
-
-
+    def is_open_visible(self, template_path="assets/open_template.jpg", threshold: float = 0.78, roi=(0.20, 0.25, 0.80, 0.80)):
+        """
+        Open butonu görünür mü? (tıklamaz)
+        """
+        shot = self.take_screenshot("open_check")
+        hit = self._find_template_in_roi(shot, template_path, roi=roi, threshold=threshold)
+        return hit is not None
 
 
 class ClickableImage(QLabel):
@@ -468,9 +517,11 @@ class ClickableImage(QLabel):
 
 class App(QWidget):
     def __init__(self):
+
+        super().__init__()
         self.ui = UiSignals()
         self.ui.log.connect(self.append_log)
-        super().__init__()
+
         ensure_dirs()
         self.cfg = load_config()
 
@@ -628,7 +679,12 @@ class App(QWidget):
         btn_move_up.clicked.connect(self.on_move_test_up)
 
         self.targets = load_targets()
-        self.target_box = QComboBox()
+        self.routes = load_routes()
+
+        self.from_box = QComboBox()
+        self.from_box.addItems(list(self.targets.keys()))
+
+        self.target_box = QComboBox()  # To
         self.target_box.addItems(list(self.targets.keys()))
 
         btn_nav = QPushButton("Navigate")
@@ -648,8 +704,13 @@ class App(QWidget):
         top.addWidget(btn_move_up)
 
         top.addSpacing(12)
-        top.addWidget(QLabel("Target:"))
+        top.addWidget(QLabel("From:"))
+        top.addWidget(self.from_box)
+
+        top.addSpacing(8)
+        top.addWidget(QLabel("To:"))
         top.addWidget(self.target_box)
+
         top.addWidget(btn_nav)
         top.addWidget(btn_nav_stop)
 
@@ -1025,6 +1086,87 @@ class App(QWidget):
             return None, raw
         return res, raw
     
+    def _get_root_target(self):
+        # Root anahtarını bul (tam eşleşme)
+        for k, v in self.targets.items():
+            if k.startswith("Root"):
+                return k, v
+        return None, None
+
+    def _straight_run_to(self, dest_x: int, dest_y: int, label: str):
+        """
+        Düz koşu: mevcut konumdan hedefe doğru joystick yönünü 1 kez hesaplar,
+        uzun süre koşar, sonra tekrar ölçer. Gerekirse 2-3 tekrar eder.
+        """
+        cfg = load_config()
+        coords = cfg.get("coords", {})
+        anchor = coords.get("move_anchor")
+        if not anchor:
+            self.ui.log.emit("Nav ERROR: move_anchor yok.")
+            return False
+
+        ax, ay = int(anchor["x"]), int(anchor["y"])
+
+        arrive_eps = 6
+        max_runs = 6
+
+        # Uzun koşu ayarları
+        R = 320
+        move_ms = 220
+        # run_hold_ms = 2600     # tek seferde daha uzun düz koşu
+        settle_s = 0.6         # koordinatın güncellenmesi için küçük bekleme
+
+        for run_i in range(1, max_runs + 1):
+            res, raw = self.read_coords_value()
+            if not res:
+                self.ui.log.emit(f"{label}: OCR FAIL raw='{raw}'")
+                time.sleep(0.6)
+                continue
+
+            x, y = res
+            dx = dest_x - x
+            dy = dest_y - y
+
+            dist = abs(dx) + abs(dy)
+
+            if dist <= 8:
+                run_hold_ms = 700
+            elif dist <= 18:
+                run_hold_ms = 1400
+            else:
+                run_hold_ms = 2600
+
+            self.ui.log.emit(f"{label} run#{run_i} cur=({x},{y}) dest=({dest_x},{dest_y}) dx={dx} dy={dy}")
+
+            if abs(dx) <= arrive_eps and abs(dy) <= arrive_eps:
+                self.ui.log.emit(f"{label}: ARRIVED ✅")
+                return True
+
+            # 360° yön (senin mapping’ine göre)
+            # vx = -dy, vy = -dx
+            vx = -dy
+            vy = -dx
+            norm = (vx * vx + vy * vy) ** 0.5
+            if norm < 1e-6:
+                self.ui.log.emit(f"{label}: norm too small, skip")
+                time.sleep(0.4)
+                continue
+
+            ux = vx / norm
+            uy = vy / norm
+
+            ex = int(ax + ux * R)
+            ey = int(ay + uy * R)
+
+            self.ui.log.emit(f"{label}: STRAIGHT RUN dir_end=({ex},{ey}) hold_ms={run_hold_ms}")
+
+            self.bot.joystick_run_w3c_raw(ax, ay, ex, ey, move_ms=move_ms, run_hold_ms=run_hold_ms)
+            time.sleep(settle_s)
+
+        # 3 deneme sonunda hâlâ varmadıysa False
+        self.ui.log.emit(f"{label}: NOT ARRIVED (max_runs reached)")
+        return False
+
     def on_stop_nav(self):
         self.nav_running = False
         if hasattr(self, "ui"):
@@ -1033,7 +1175,6 @@ class App(QWidget):
             # fallback
             self.append_log("Nav: stop requested")
 
-
     def on_navigate(self):
         def worker():
             try:
@@ -1041,101 +1182,222 @@ class App(QWidget):
                     self.ui.log.emit("Nav: session yok, Connect ediyorum...")
                     self.bot.connect()
 
-                cfg = load_config()
-                c = cfg.get("coords", {})
-                anchor = c.get("move_anchor")
-                if not anchor:
-                    self.ui.log.emit("Nav ERROR: move_anchor kalibre edilmemiş.")
+                # en güncel routes/targets yükle (dosya değişmiş olabilir)
+                self.targets = load_targets()
+                self.routes = load_routes()
+
+                from_name = self.from_box.currentText()
+                to_name = self.target_box.currentText()
+
+                if not from_name or from_name not in self.targets:
+                    self.ui.log.emit("Nav ERROR: From seçimi geçersiz.")
+                    return
+                if not to_name or to_name not in self.targets:
+                    self.ui.log.emit("Nav ERROR: To seçimi geçersiz.")
                     return
 
-                key = self.target_box.currentText()
-                if not key or key not in self.targets:
-                    self.ui.log.emit("Nav ERROR: Target seçili değil veya targets.json bulunamadı.")
+                root_name = self._get_root_name()
+                if not root_name or root_name not in self.targets:
+                    self.ui.log.emit("Nav ERROR: routes.json root geçersiz veya targets.json içinde yok.")
                     return
-
-                tx, ty = self.targets[key]
-
-
-                # parametreler (MVP default)
-                R = 300          # joystick çekme mesafesi
-                step_ms = 950    # her adım yürüsün (seyrek update için)
-                settle_s = 1.25  # yürüdükten sonra coords update bekle
-                arrive_eps = 2   # hedefe varma eşiği
 
                 self.nav_running = True
-                self.ui.log.emit(f"Nav: START -> {key} target=({tx},{ty})")
+                self.ui.log.emit(f"Nav: START from='{from_name}' to='{to_name}' root='{root_name}'")
 
-                # döngü
-                max_iters = 120  # güvenlik
-                it = 0
+                # 1) Direct rule varsa root'a uğrama
+                if is_direct_allowed(self.routes, from_name, to_name):
+                    self.ui.log.emit("Nav: DIRECT rule matched (no root)")
 
-                while self.nav_running and it < max_iters:
-                    it += 1
+                    ran = self._run_leg_if_exists(from_name, to_name)
+                    if not ran:
+                        self.ui.log.emit("Nav: No leg for direct route (next step: LearnLeg / fallback).")
+                        return
 
-                    res, raw = self.read_coords_value()
-                    if not res:
-                        self.ui.log.emit(f"Nav OCR FAIL raw='{raw}' (iter={it})")
-                        time.sleep(0.6)
-                        continue
+                    # ✅ Leg bitti -> OPEN görünür olana kadar yaklaş
+                    if not self.nav_running:
+                        return
+                    self.ui.log.emit("Nav: SNAP (direct)")
+                    self._snap_to_open(to_name)
+                    return
 
-                    x, y = res
-                    dx = tx - x
-                    dy = ty - y
+                # 2) Root üzerinden
+                self.ui.log.emit("Nav: ROOT route")
 
-                    self.ui.log.emit(f"Nav iter={it} cur=({x},{y}) dx={dx} dy={dy} raw={raw}")
+                # from -> root
+                ran1 = self._run_leg_if_exists(from_name, root_name)
+                if not ran1:
+                    self.ui.log.emit("Nav: No leg for from->root (next step: LearnLeg / fallback).")
+                    return
 
-                    # vardık mı?
-                    if abs(dx) <= arrive_eps and abs(dy) <= arrive_eps:
-                        self.ui.log.emit("Nav: ARRIVED ✅")
-                        self.nav_running = False
-                        break
+                if not self.nav_running:
+                    return
 
-                    ax, ay = int(anchor["x"]), int(anchor["y"])
+                # root -> to
+                ran2 = self._run_leg_if_exists(root_name, to_name)
+                if not ran2:
+                    self.ui.log.emit("Nav: No leg for root->to (next step: LearnLeg / fallback).")
+                    return
 
-                    # Hangi ekseni önce düzeltelim?
-                    # büyük farkı önce kapatmak daha hızlı
-                    if abs(dx) >= abs(dy):
-                        # X düzelt
-                        if dx > 0:
-                            # Up drag (X artırır)
-                            ex, ey = ax, ay - R
-                            self.ui.log.emit("Nav move: UP (increase X)")
-                        else:
-                            # Down drag (X azaltır)
-                            ex, ey = ax, ay + R
-                            self.ui.log.emit("Nav move: DOWN (decrease X)")
-                    else:
-                        # Y düzelt
-                        if dy > 0:
-                            # Left drag (Y artırır)
-                            ex, ey = ax - R, ay
-                            self.ui.log.emit("Nav move: LEFT (increase Y)")
-                        else:
-                            # Right drag (Y azaltır)
-                            ex, ey = ax + R, ay
-                            self.ui.log.emit("Nav move: RIGHT (decrease Y)")
-
-                    # joystick drag (HTTP raw actions kullanan metodun)
-                    self.bot.joystick_drag_w3c_raw(ax, ay, ex, ey, move_ms=step_ms)
-
-                    # update bekle
-                    time.sleep(settle_s)
-
-                if it >= max_iters:
-                    self.ui.log.emit("Nav: stopped (max_iters reached)")
-                self.nav_running = False
+                # ✅ Root->Target leg bitti -> OPEN görünür olana kadar yaklaş
+                if not self.nav_running:
+                    return
+                self.ui.log.emit("Nav: SNAP (root->target)")
+                self._snap_to_open(to_name)
 
             except Exception as e:
-                self.nav_running = False
                 self.ui.log.emit(f"Nav ERROR: {e}")
+            finally:
+                self.nav_running = False
+                self.ui.log.emit("Nav: STOPPED")
 
-        # aynı anda iki nav thread açılmasın
         if self.nav_running:
             self.ui.log.emit("Nav already running.")
             return
 
         self.nav_thread = threading.Thread(target=worker, daemon=True)
         self.nav_thread.start()
+
+
+    def _get_root_name(self):
+        r = self.routes.get("root")
+        if not r:
+            return None
+        return r
+
+    def _run_leg_if_exists(self, from_name: str, to_name: str) -> bool:
+        """
+        routes.json legs içinde varsa tek koşu ile leg'i uygular.
+        True: leg çalıştırıldı (sonuç başarılı/başarısız olsa da çalıştı)
+        False: leg yok
+        """
+        lk = leg_key(from_name, to_name)
+        legs = self.routes.get("legs", {})
+        if lk not in legs:
+            return False
+
+        spec = legs[lk]
+        hold_ms = int(spec.get("hold_ms", 1700))
+        R = int(spec.get("R", 320))
+
+        cfg = load_config()
+        anchor = cfg.get("coords", {}).get("move_anchor")
+        if not anchor:
+            self.ui.log.emit("Nav ERROR: move_anchor yok.")
+            return True
+
+        ax, ay = int(anchor["x"]), int(anchor["y"])
+
+        # ✅ 1) Eğer leg sabit vektör içeriyorsa onu kullan
+        if "end_dx" in spec and "end_dy" in spec:
+            ex = int(ax + int(spec["end_dx"]))
+            ey = int(ay + int(spec["end_dy"]))
+            self.ui.log.emit(f"Leg(VEC): {from_name} -> {to_name} hold_ms={hold_ms} end=({ex},{ey})")
+        else:
+            # ✅ 2) Yoksa eski 360° hesap devam
+            res, raw = self.read_coords_value()
+            if not res:
+                self.ui.log.emit(f"Leg OCR FAIL raw='{raw}'")
+                return True
+
+            x, y = res
+            tx, ty = self.targets.get(to_name, (None, None))
+            if tx is None:
+                self.ui.log.emit(f"Leg ERROR: target not found in targets.json: {to_name}")
+                return True
+
+            dx = tx - x
+            dy = ty - y
+
+            vx = -dy
+            vy = -dx
+            norm = (vx * vx + vy * vy) ** 0.5
+            if norm < 1e-6:
+                self.ui.log.emit("Leg: norm too small")
+                return True
+
+            ux = vx / norm
+            uy = vy / norm
+            ex = int(ax + ux * R)
+            ey = int(ay + uy * R)
+
+            self.ui.log.emit(f"Leg(360): {from_name} -> {to_name} hold_ms={hold_ms} end=({ex},{ey})")
+
+        # ✅ koşuyu çalıştır
+        self.bot.joystick_run_w3c_raw(ax, ay, ex, ey, move_ms=220, run_hold_ms=hold_ms)
+        return True
+    
+    def _snap_to_open(self, target_name: str, max_steps: int = 8) -> bool:
+        """
+        Hedef NPC koordinatına doğru küçük adımlarla yaklaşır ve Open görünene kadar dener.
+        """
+        # Root için snap gerek yok
+        if target_name.startswith("Root"):
+            return True
+
+        if target_name not in self.targets:
+            self.ui.log.emit(f"Snap ERROR: target not found: {target_name}")
+            return False
+
+        tx, ty = self.targets[target_name]
+
+        cfg = load_config()
+        anchor = cfg.get("coords", {}).get("move_anchor")
+        if not anchor:
+            self.ui.log.emit("Snap ERROR: move_anchor yok.")
+            return False
+
+        ax, ay = int(anchor["x"]), int(anchor["y"])
+
+        # snap parametreleri
+        R_snap = 220
+        settle_s = 0.35
+
+        for i in range(1, max_steps + 1):
+            # 1) Open görünüyorsa bitti
+            if self.bot.is_open_visible(threshold=0.78):
+                self.ui.log.emit(f"Snap: OPEN visible ✅ (step {i-1})")
+                return True
+
+            # 2) Koordinatı oku
+            res, raw = self.read_coords_value()
+            if not res:
+                self.ui.log.emit(f"Snap OCR FAIL raw='{raw}'")
+                time.sleep(0.5)
+                continue
+
+            x, y = res
+            dx = tx - x
+            dy = ty - y
+            dist = abs(dx) + abs(dy)
+
+            self.ui.log.emit(f"Snap step#{i} cur=({x},{y}) target=({tx},{ty}) dx={dx} dy={dy} dist={dist}")
+
+            # Çok yakınsak daha kısa koş
+            run_hold_ms = 400 if dist <= 8 else 650
+
+            # 360° yön mapping (senin ölçümlerine göre)
+            vx = -dy
+            vy = -dx
+            norm = (vx * vx + vy * vy) ** 0.5
+            if norm < 1e-6:
+                time.sleep(0.4)
+                continue
+
+            ux = vx / norm
+            uy = vy / norm
+
+            ex = int(ax + ux * R_snap)
+            ey = int(ay + uy * R_snap)
+
+            self.bot.joystick_run_w3c_raw(ax, ay, ex, ey, move_ms=220, run_hold_ms=run_hold_ms)
+            time.sleep(settle_s)
+
+        # son kez kontrol
+        ok = self.bot.is_open_visible(threshold=0.78)
+        self.ui.log.emit("Snap: OPEN visible ✅ (final)" if ok else "Snap: OPEN NOT visible ❌")
+        return ok
+
+
 
 
 def main():
